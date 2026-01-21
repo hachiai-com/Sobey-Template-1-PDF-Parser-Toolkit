@@ -1,0 +1,42 @@
+{
+  "slug": "sobey-pdf-parser",
+  "display_name": "Sobey PDF Parser Toolkit",
+  "description": "Parses Sobey logistics PDF files (Template 1 and Template 2) to extract shipment data including vendor information, pickup/delivery dates, and line items",
+  "version": "0.1.0",
+  "entrypoint": {
+    "type": "python",
+    "command": "python main.py"
+  },
+  "capabilities": [
+    {
+      "name": "parse_pdf",
+      "description": "Parse a single Sobey PDF file and extract shipment data. Automatically detects Template 1 or Template 2 format and extracts vendor information, dates, cubes, weight, pieces, and other shipment details.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "pdf_path": {
+            "type": "string",
+            "description": "Full path to the PDF file to parse (e.g., /path/to/file.pdf)"
+          }
+        },
+        "required": ["pdf_path"]
+      }
+    },
+    {
+      "name": "parse_directory",
+      "description": "Parse all PDF files in a directory. Processes each PDF file found in the specified directory and returns aggregated results.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "directory_path": {
+            "type": "string",
+            "description": "Full path to the directory containing PDF files (e.g., /path/to/pdfs/)"
+          }
+        },
+        "required": ["directory_path"]
+      }
+    }
+  ],
+  "author": "RPA Engineer",
+  "tags": ["pdf", "parser", "logistics", "sobey", "shipment", "data-extraction"]
+}

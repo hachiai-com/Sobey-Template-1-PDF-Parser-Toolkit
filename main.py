@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import os
 import sys
 import re
 from pathlib import Path
@@ -8,6 +9,28 @@ from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 import PyPDF2
 import logging
+
+try:
+    import mysql.connector
+except ImportError:
+    mysql = None
+
+
+TABLE_NAME = "la_enhanced_shipment_creation_raw"
+DB_CONFIG = {
+    "host": os.environ.get("MYSQL_HOST", "127.0.0.1"),
+    "port": int(os.environ.get("MYSQL_PORT", "3307")),
+    "user": os.environ.get("MYSQL_USER", "neehar"),
+    "password": os.environ.get("MYSQL_PASSWORD", "X2fjRge7VtjDzETc"),
+    "database": os.environ.get("MYSQL_DATABASE", "sample_db"),
+}
+TABLE_COLUMNS_WHITELIST = {
+    "vendorname", "po", "vendorRef", "vendorno", "shipto", "consignee", "customer",
+    "vendorLoadAt", "delDate", "lifts", "pickApptNo", "weight", "pallets", "cases",
+    "cubes", "invoiceRef", "temp", "pickupDate", "template_flag", "description",
+    "ship_from", "shipment_type", "item_id", "monday_group_name", "email_from",
+    "filename", "audit_runs", "audit_status",
+}
 
 
 def get_downloads_folder() -> Path:
@@ -56,23 +79,37 @@ def flatten_results_to_db_rows(results_list: List[Dict]) -> List[Dict]:
     return rows
 
 
-def save_result_to_downloads(content: Dict, source_name: Optional[str] = None) -> str:
+def insert_results_to_db(results: List[Dict]) -> tuple:
     """
-    Save content (results only) to a text file in the user's Downloads folder.
-    Returns the path of the saved file. File contains only the "results" payload, no capability/saved_to wrapper.
+    Insert parsed results into la_enhanced_shipment_creation_raw.
+    Returns (rows_inserted, error_message). error_message is None on success.
     """
-    downloads = get_downloads_folder()
-    downloads.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    if source_name:
-        safe_name = re.sub(r'[^\w\-.]', '_', Path(source_name).stem)[:50]
-        filename = f"sobey_parser_{safe_name}_{timestamp}.txt"
-    else:
-        filename = f"sobey_parser_result_{timestamp}.txt"
-    out_path = downloads / filename
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(json.dumps(content, indent=2, ensure_ascii=False))
-    return str(out_path)
+    if mysql is None:
+        return 0, "mysql-connector-python not installed; run: pip install mysql-connector-python"
+    if not results:
+        return 0, None
+    rows_inserted = 0
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        for row in results:
+            if not isinstance(row, dict):
+                continue
+            cols = [k for k in row.keys() if k in TABLE_COLUMNS_WHITELIST]
+            if not cols:
+                continue
+            placeholders = ", ".join(["%s"] * len(cols))
+            columns = ", ".join(f"`{c}`" for c in cols)
+            sql = f"INSERT INTO `{TABLE_NAME}` ({columns}) VALUES ({placeholders})"
+            values = [row.get(c) if row.get(c) != "" else None for c in cols]
+            cursor.execute(sql, values)
+            rows_inserted += 1
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return rows_inserted, None
+    except Exception as e:
+        return rows_inserted, str(e)
 
 # Setup logging (INFO only for internal use; console is silenced in main())
 logging.basicConfig(level=logging.INFO)
@@ -522,43 +559,46 @@ def main():
         if capability == "parse_pdf":
             pdf_path = args.get("pdf_path")
             if not pdf_path:
-                result = {
-                    "error": "Missing required parameter: pdf_path",
-                    "capability": "parse_pdf"
-                }
+                result = {"error": "Missing required parameter: pdf_path", "capability": "parse_pdf"}
             else:
                 result = parser.parse_pdf(pdf_path)
             if result.get("error"):
-                file_content = {"results": [], "error": result["error"]}
+                rows_inserted, db_error = 0, None
+                rows = []
             else:
-                file_content = {"results": flatten_results_to_db_rows([result["result"]])}
-            source_for_name = pdf_path if isinstance(pdf_path, str) and not result.get("error") else None
-            saved_path = save_result_to_downloads(file_content, source_for_name)
-            print(json.dumps({"capability": "parse_pdf", "saved_to": saved_path}, indent=2))
+                rows = flatten_results_to_db_rows([result["result"]])
+                rows_inserted, db_error = insert_results_to_db(rows)
+            out = {"capability": "parse_pdf", "rows_inserted": rows_inserted, "database": DB_CONFIG["database"], "table": TABLE_NAME}
+            if result.get("error"):
+                out["error"] = result["error"]
+            if db_error:
+                out["error"] = db_error
+            print(json.dumps(out, indent=2))
 
         elif capability == "parse_directory":
             directory_path = args.get("directory_path")
             if not directory_path:
-                result = {
-                    "error": "Missing required parameter: directory_path",
-                    "capability": "parse_directory"
-                }
+                result = {"error": "Missing required parameter: directory_path", "capability": "parse_directory"}
             else:
                 result = parser.parse_directory(directory_path)
             if result.get("error"):
-                file_content = {"results": [], "error": result["error"]}
+                rows_inserted, db_error = 0, None
             else:
-                file_content = {"results": flatten_results_to_db_rows(result["result"]["results"])}
-            saved_path = save_result_to_downloads(file_content, None)
-            print(json.dumps({"capability": "parse_directory", "saved_to": saved_path}, indent=2))
+                rows = flatten_results_to_db_rows(result["result"]["results"])
+                rows_inserted, db_error = insert_results_to_db(rows)
+            out = {"capability": "parse_directory", "rows_inserted": rows_inserted, "database": DB_CONFIG["database"], "table": TABLE_NAME}
+            if result.get("error"):
+                out["error"] = result["error"]
+            if db_error:
+                out["error"] = db_error
+            print(json.dumps(out, indent=2))
 
         else:
             print(json.dumps({"error": f"Unknown capability: {capability}", "capability": capability}, indent=2))
 
     except Exception as e:
-        file_content = {"results": [], "error": str(e)}
-        saved_path = save_result_to_downloads(file_content, None)
-        print(json.dumps({"capability": "unknown", "saved_to": saved_path}, indent=2))
+        out = {"capability": "unknown", "error": str(e), "rows_inserted": 0, "database": DB_CONFIG["database"], "table": TABLE_NAME}
+        print(json.dumps(out, indent=2))
         sys.exit(1)
 
 

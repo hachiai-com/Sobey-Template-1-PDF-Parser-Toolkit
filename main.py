@@ -15,6 +15,47 @@ def get_downloads_folder() -> Path:
     return Path.home() / "Downloads"
 
 
+# Map toolkit record keys to la_enhanced_shipment_creation_raw column names
+TOOLKIT_TO_DB_COLUMNS = {
+    "template": "template_flag",
+    "del_date": "delDate",
+    "pickup_date": "pickupDate",
+    "ship_from": "ship_from",
+    "ship_to": "shipto",
+    "vendor_no": "vendorno",
+    "vendor_name": "vendorname",
+    "cubes": "cubes",
+    "weight": "weight",
+    "pieces": "cases",
+    "po": "po",
+    "shipment_type": "shipment_type",
+    "pallets": "pallets",
+    "description": "description",
+}
+
+
+def record_to_db_row(record: Dict, file_name: str) -> Dict:
+    """Convert a single parser record to a flat row with DB column names."""
+    row = {}
+    for toolkit_key, db_col in TOOLKIT_TO_DB_COLUMNS.items():
+        row[db_col] = record.get(toolkit_key)
+    row["filename"] = file_name
+    return row
+
+
+def flatten_results_to_db_rows(results_list: List[Dict]) -> List[Dict]:
+    """
+    Flatten nested results (each with records + file_name) into a list of rows
+    with DB column names. One row per record; each row includes filename from parent.
+    """
+    rows = []
+    for file_result in results_list:
+        file_name = file_result.get("file_name") or ""
+        for record in file_result.get("records", []):
+            rows.append(record_to_db_row(record, file_name))
+    return rows
+
+
 def save_result_to_downloads(content: Dict, source_name: Optional[str] = None) -> str:
     """
     Save content (results only) to a text file in the user's Downloads folder.
@@ -490,7 +531,7 @@ def main():
             if result.get("error"):
                 file_content = {"results": [], "error": result["error"]}
             else:
-                file_content = {"results": [result["result"]]}
+                file_content = {"results": flatten_results_to_db_rows([result["result"]])}
             source_for_name = pdf_path if isinstance(pdf_path, str) and not result.get("error") else None
             saved_path = save_result_to_downloads(file_content, source_for_name)
             print(json.dumps({"capability": "parse_pdf", "saved_to": saved_path}, indent=2))
@@ -507,7 +548,7 @@ def main():
             if result.get("error"):
                 file_content = {"results": [], "error": result["error"]}
             else:
-                file_content = {"results": result["result"]["results"]}
+                file_content = {"results": flatten_results_to_db_rows(result["result"]["results"])}
             saved_path = save_result_to_downloads(file_content, None)
             print(json.dumps({"capability": "parse_directory", "saved_to": saved_path}, indent=2))
 

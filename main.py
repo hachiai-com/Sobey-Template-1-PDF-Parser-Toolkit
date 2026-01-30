@@ -9,7 +9,32 @@ from typing import List, Dict, Optional, Tuple
 import PyPDF2
 import logging
 
-# Setup logging
+
+def get_downloads_folder() -> Path:
+    """Return the user's Downloads folder (works on Windows, macOS, and Linux)."""
+    return Path.home() / "Downloads"
+
+
+def save_result_to_downloads(result: Dict, source_name: Optional[str] = None) -> str:
+    """
+    Save parsed JSON result to a text file in the user's Downloads folder.
+    Returns the path of the saved file.
+    """
+    downloads = get_downloads_folder()
+    downloads.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if source_name:
+        safe_name = re.sub(r'[^\w\-.]', '_', Path(source_name).stem)[:50]
+        filename = f"sobey_parser_{safe_name}_{timestamp}.txt"
+    else:
+        filename = f"sobey_parser_result_{timestamp}.txt"
+    out_path = downloads / filename
+    result_with_path = {**result, "saved_to": str(out_path)}
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(result_with_path, indent=2, ensure_ascii=False))
+    return str(out_path)
+
+# Setup logging (INFO only for internal use; console is silenced in main())
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
@@ -440,15 +465,20 @@ class SobeyTemplate1PdfParser:
 
 
 def main():
-    """Main entry point - reads JSON from stdin, outputs JSON to stdout"""
+    """Main entry point - reads JSON from stdin; saves full result to file, prints only save location."""
+    # Silence all logging to the terminal (full output is only in the saved text file)
+    logging.getLogger().setLevel(logging.CRITICAL)
+    for h in list(logging.root.handlers):
+        logging.root.removeHandler(h)
+
     try:
         input_data = json.load(sys.stdin)
-        
+
         capability = input_data.get("capability")
         args = input_data.get("args", {})
-        
+
         parser = SobeyTemplate1PdfParser()
-        
+
         if capability == "parse_pdf":
             pdf_path = args.get("pdf_path")
             if not pdf_path:
@@ -458,8 +488,10 @@ def main():
                 }
             else:
                 result = parser.parse_pdf(pdf_path)
-            print(json.dumps(result, indent=2))
-            
+            source_for_name = pdf_path if isinstance(pdf_path, str) and not result.get("error") else None
+            saved_path = save_result_to_downloads(result, source_for_name)
+            print(json.dumps({"capability": "parse_pdf", "saved_to": saved_path}, indent=2))
+
         elif capability == "parse_directory":
             directory_path = args.get("directory_path")
             if not directory_path:
@@ -469,20 +501,19 @@ def main():
                 }
             else:
                 result = parser.parse_directory(directory_path)
-            print(json.dumps(result, indent=2))
-            
+            saved_path = save_result_to_downloads(result, None)
+            print(json.dumps({"capability": "parse_directory", "saved_to": saved_path}, indent=2))
+
         else:
-            print(json.dumps({
-                "error": f"Unknown capability: {capability}",
-                "capability": capability
-            }, indent=2))
-    
+            print(json.dumps({"error": f"Unknown capability: {capability}", "capability": capability}, indent=2))
+
     except Exception as e:
-        log.error(f"Main error: {e}", exc_info=True)
-        print(json.dumps({
-            "error": f"Error: {str(e)}",
+        err_result = {
+            "error": str(e),
             "capability": "unknown"
-        }, indent=2))
+        }
+        saved_path = save_result_to_downloads(err_result, None)
+        print(json.dumps({"capability": "unknown", "saved_to": saved_path}, indent=2))
         sys.exit(1)
 
 

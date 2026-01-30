@@ -15,10 +15,10 @@ def get_downloads_folder() -> Path:
     return Path.home() / "Downloads"
 
 
-def save_result_to_downloads(result: Dict, source_name: Optional[str] = None) -> str:
+def save_result_to_downloads(content: Dict, source_name: Optional[str] = None) -> str:
     """
-    Save parsed JSON result to a text file in the user's Downloads folder.
-    Returns the path of the saved file.
+    Save content (results only) to a text file in the user's Downloads folder.
+    Returns the path of the saved file. File contains only the "results" payload, no capability/saved_to wrapper.
     """
     downloads = get_downloads_folder()
     downloads.mkdir(parents=True, exist_ok=True)
@@ -29,9 +29,8 @@ def save_result_to_downloads(result: Dict, source_name: Optional[str] = None) ->
     else:
         filename = f"sobey_parser_result_{timestamp}.txt"
     out_path = downloads / filename
-    result_with_path = {**result, "saved_to": str(out_path)}
     with open(out_path, "w", encoding="utf-8") as f:
-        f.write(json.dumps(result_with_path, indent=2, ensure_ascii=False))
+        f.write(json.dumps(content, indent=2, ensure_ascii=False))
     return str(out_path)
 
 # Setup logging (INFO only for internal use; console is silenced in main())
@@ -488,8 +487,12 @@ def main():
                 }
             else:
                 result = parser.parse_pdf(pdf_path)
+            if result.get("error"):
+                file_content = {"results": [], "error": result["error"]}
+            else:
+                file_content = {"results": [result["result"]]}
             source_for_name = pdf_path if isinstance(pdf_path, str) and not result.get("error") else None
-            saved_path = save_result_to_downloads(result, source_for_name)
+            saved_path = save_result_to_downloads(file_content, source_for_name)
             print(json.dumps({"capability": "parse_pdf", "saved_to": saved_path}, indent=2))
 
         elif capability == "parse_directory":
@@ -501,18 +504,19 @@ def main():
                 }
             else:
                 result = parser.parse_directory(directory_path)
-            saved_path = save_result_to_downloads(result, None)
+            if result.get("error"):
+                file_content = {"results": [], "error": result["error"]}
+            else:
+                file_content = {"results": result["result"]["results"]}
+            saved_path = save_result_to_downloads(file_content, None)
             print(json.dumps({"capability": "parse_directory", "saved_to": saved_path}, indent=2))
 
         else:
             print(json.dumps({"error": f"Unknown capability: {capability}", "capability": capability}, indent=2))
 
     except Exception as e:
-        err_result = {
-            "error": str(e),
-            "capability": "unknown"
-        }
-        saved_path = save_result_to_downloads(err_result, None)
+        file_content = {"results": [], "error": str(e)}
+        saved_path = save_result_to_downloads(file_content, None)
         print(json.dumps({"capability": "unknown", "saved_to": saved_path}, indent=2))
         sys.exit(1)
 
